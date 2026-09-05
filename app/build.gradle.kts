@@ -17,6 +17,23 @@ android {
         versionName = "1.0"
     }
 
+    // Release signing is driven entirely by environment variables, so no key
+    // material and no passwords ever live in the repo. With them unset -- any
+    // ordinary local build -- `release` is simply unsigned and `assembleDebug`
+    // is what you want. CI sets them from repository secrets.
+    val keystorePath: String? = System.getenv("KEYSTORE_PATH")
+
+    signingConfigs {
+        if (keystorePath != null) {
+            create("release") {
+                storeFile = file(keystorePath)
+                storePassword = System.getenv("KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("KEY_ALIAS")
+                keyPassword = System.getenv("KEY_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
@@ -24,6 +41,7 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            if (keystorePath != null) signingConfig = signingConfigs.getByName("release")
         }
     }
 

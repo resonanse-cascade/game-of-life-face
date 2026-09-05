@@ -1,0 +1,72 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write        # needed to create the release on a tag
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: android-actions/setup-android@v3
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Unit tests
+        run: ./gradlew testDebugUnitTest
+
+      # A signed release build when the signing secrets are configured, and the
+      # debug build otherwise. The debug fallback is installable but carries the
+      # runner's throwaway debug key, whose signature differs from build to
+      # build -- so updating over a previous install needs an uninstall first.
+      # See "Releases" in the README for the one-time keystore setup.
+      - name: Build APK
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -n "${KEYSTORE_BASE64:-}" ]; then
+            printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
+            export KEYSTORE_PATH="$RUNNER_TEMP/release.jks"
+            ./gradlew assembleRelease
+            cp app/build/outputs/apk/release/app-release.apk game-of-life-face.apk
+            rm -f "$RUNNER_TEMP/release.jks"
+            echo "Built a signed release APK."
+          else
+            ./gradlew assembleDebug
+            cp app/build/outputs/apk/debug/app-debug.apk game-of-life-face.apk
+            echo "No signing secrets set - built the debug APK."
+          fi
+
+      - name: Report what was signed with
+        run: |
+          "$ANDROID_HOME"/build-tools/*/apksigner verify --print-certs \
+            game-of-life-face.apk | grep -E "certificate DN" || true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: game-of-life-face-apk
+          path: game-of-life-face.apk
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" game-of-life-face.apk --generate-notes
